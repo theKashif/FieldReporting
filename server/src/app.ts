@@ -5,11 +5,16 @@ import path from 'path';
 
 import {connectDatabase} from './config/database';
 import reportRoutes from './routes/reportRoutes';
+import chaosRoutes from './routes/chaosRoutes';
+import {chaosMiddleware} from './middleware/chaos';
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Failure on Demand / Chaos testing middleware
+app.use(chaosMiddleware);
 
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
@@ -17,6 +22,7 @@ app.get('/health', (_req, res) => {
   res.json({status: 'ok', message: 'Field Reporting API is running.'});
 });
 
+app.use('/api/chaos', chaosRoutes);
 app.use('/api/reports', reportRoutes);
 
 // Handle Multer errors and other middleware errors.

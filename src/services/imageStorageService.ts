@@ -1,4 +1,3 @@
-
 import {Image, getRealPath} from 'react-native-compressor';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 
@@ -137,4 +136,15 @@ export async function deleteStoredImage(uri: string): Promise<void> {
 
 export async function deleteStoredImages(uris: string[]): Promise<void> {
   await Promise.all(uris.map(deleteStoredImage));
+}
+
+export async function clearAllStoredImages(): Promise<void> {
+  try {
+    if (await fs.exists(IMAGE_DIRECTORY)) {
+      await fs.unlink(IMAGE_DIRECTORY);
+    }
+    await ensureImageDirectory();
+  } catch (error) {
+    console.warn('Failed to clear stored images directory:', error);
+  }
 }

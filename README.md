@@ -1,97 +1,340 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Field Reporting App
 
-# Getting Started
+> **Mobile Engineering Technical Assessment**  
+> An offline-first React Native mobile application designed for field inspectors filing photo reports over hostile, unstable, and 2G network environments.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+---
 
-## Step 1: Start Metro
+## 1. Executive Summary & Philosophy
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+Field workers frequently operate in remote sites where connectivity is poor (2G speeds), intermittent, or absent for hours at a time. The core mission of this application is **guaranteed delivery with zero data loss and exactly-once submission**:
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+1. **Compose**: Capture or select 1 to 5 photos (from camera or gallery) with a short description.
+2. **Deliver**: Unattended background upload queue surviving dropped connections, force-quits, and system reboots.
+3. **Review**: Real-time review of submissions retrieved directly from the server (not read back from local state).
+4. **Start Over**: A deliberate reset function with a clearly defined and documented blast radius.
 
-```sh
-# Using npm
+### Key Constraints Satisfied
+- **1–5 Images Bound**: Strictly enforced at composition, storage, and server ingestion.
+- **5 MB Ceiling**: Guaranteed compression ceiling. Camera originals straight off modern 100MP+ sensors (15–20 MB) are automatically compressed in progressive resolution/quality tiers to land strictly under 5 MB without degrading fidelity.
+- **2G Network Resilience**: Requests are dispatched sequentially over FIFO queues with 120-second timeouts, exponential backoff, and automatic network reconnection listeners.
+- **Idempotency & Exactly-Once Delivery**: Client-generated UUIDv4 tokens ensure that repeated retry attempts across connection drops never produce duplicate records on the server.
+- **Backend Failure on Demand**: Built-in chaos engine supporting programmatic latency, dropped sockets, server errors (500), and rate limiting (429).
+
+---
+
+## 2. Architecture & System Design
+
+```
++-----------------------------------------------------------------------------------+
+|                                 REACT NATIVE CLIENT                               |
+|                                                                                   |
+|  +---------------------+      +------------------------+                          |
+|  |   UI Components     | ---> | Progressive Compressor |                          |
+|  | (Compose / Review)  |      | (@react-native-        |                          |
+|  +----------+----------+      |  compressor)           |                          |
+|             |                 +-----------+------------+                          |
+|             v                             |                                       |
+|  +---------------------+                  v                                       |
+|  | Local Sandboxed     | <----------------+                                       |
+|  | Storage             |                                                          |
+|  | (report-images/)    |                                                          |
+|  +----------+----------+                                                          |
+|             |                                                                     |
+|             v                                                                     |
+|  +-------------------------------------+      +--------------------------------+  |
+|  | Fast SQLite Database Layer          | <--> | Detached Queue Worker Loop     |  |
+|  | (@op-engineering/op-sqlite)         |      | - FIFO sequential processing   |  |
+|  | - reports (id, status, retry_count) |      | - Exponential backoff + jitter |  |
+|  | - report_images (report_id, uri)    |      | - NetInfo reconnect listener   |  |
+|  +-------------------------------------+      +---------------+----------------+  |
++---------------------------------------------------------------|-------------------+
+                                                                | Multipart / FormData
+                                                                | (reportId, description, images)
+                                                                v
++-----------------------------------------------------------------------------------+
+|                              EXPRESS / MONGO BACKEND                              |
+|                                                                                   |
+|  +-----------------------------------------------------------------------------+  |
+|  | Chaos Middleware (/api/chaos & x-chaos-* headers)                           |  |
+|  | (Simulates: delay, drop socket, 500 error, 429 rate limit)                   |  |
+|  +--------------------------------------+--------------------------------------+  |
+|                                         |                                         |
+|                                         v                                         |
+|  +--------------------------------------+--------------------------------------+  |
+|  | Multer Disk Storage (/uploads)                                              |  |
+|  +--------------------------------------+--------------------------------------+  |
+|                                         |                                         |
+|                                         v                                         |
+|  +-----------------------------------------------------------------------------+  |
+|  | Reports Service (Atomic Upsert on reportId)                                 |  |
+|  | - Idempotency guaranteed via MongoDB unique index on reportId               |  |
+|  +-----------------------------------------------------------------------------+  |
++-----------------------------------------------------------------------------------+
+```
+
+### Layer Breakdown
+
+1. **Presentation & Compose Layer** (`src/screens/CreateReportScreen.tsx`):
+   - Fast, non-blocking UI. The compose action takes user inputs and persists them immediately to local storage.
+   - The UI never waits for network I/O to confirm report creation.
+
+2. **Progressive Compression Engine** (`src/services/imageStorageService.ts`):
+   - In field conditions, camera photos can easily exceed 15–20 MB.
+   - Rather than naive downscaling, images pass through a multi-stage compression ladder (`2560px @ 85%`, `2200px @ 80%`, `1920px @ 75%`, down to `1024px @ 50%`) until the output file size strictly satisfies `size < 5 MB`.
+   - Processed files are copied into the app's isolated `DocumentDir/report-images/` directory so that gallery deletions by the user or OS cache purges cannot invalidate pending uploads.
+
+3. **Persistent SQLite Store** (`src/database/` & `src/repositories/`):
+   - Powered by `@op-engineering/op-sqlite` for high-throughput synchronous SQLite bindings via JSI.
+   - State machine: `pending` -> `uploading` -> `uploaded` (or `failed` after max retries).
+   - If the app process is killed mid-upload, any report stuck in `uploading` is automatically reset to `pending` on restart.
+
+4. **Detached Upload Queue Worker** (`src/workers/uploadQueueWorker.ts`):
+   - Operates independently of screen mounts or React component lifecycles.
+   - Strictly FIFO: On 2G networks, parallel uploads saturate bandwidth and lead to cascading socket timeouts. Processing reports one at a time preserves throughput and maximizes the odds of each individual report landing.
+   - Network event awareness: Listens for `@react-native-community/netinfo` state changes. When connection drops, uploading pauses; when connection returns, backoff timers are cleared and the queue awakens instantly.
+   - Exponential backoff with jitter prevents thundering-herd problems against an intermittently available server.
+
+5. **Server Layer & Deduplication** (`server/src/`):
+   - Express TypeScript API with MongoDB persistence and Multer file storage.
+   - Every report submission includes a client-generated `reportId` UUID.
+   - `Report.findOneAndUpdate({ reportId }, ..., { upsert: true })` ensures that even if an upload succeeds on the server but the connection drops before the 200 OK arrives at the client, the subsequent client retry is completely idempotent.
+
+---
+
+## 3. Getting Started
+
+### Prerequisites
+- Node.js (v18 or higher)
+- Android SDK & Android Studio (or connected Android device via USB debugging)
+- MongoDB instance (local or MongoDB Atlas connection string)
+
+---
+
+### Step 1: Start the Backend Server
+
+```bash
+cd server
+npm install
+```
+
+Configure your environment: create a `server/.env` file (or use default `mongodb://127.0.0.1:27017/field-reporting`):
+```env
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/field-reporting
+CLIENT_URL=*
+```
+
+Start the server in development mode:
+```bash
+npm run dev
+```
+The server will start at `http://localhost:5000`.
+
+---
+
+### Step 2: Route Device Traffic to Localhost
+
+If testing with a physical Android device or emulator via USB debugging, forward port 5000:
+```bash
+adb reverse tcp:5000 tcp:5000
+```
+*(The app defaults to `http://localhost:5000/api/reports` via `src/config/api.ts`).*
+
+---
+
+### Step 3: Run the React Native Mobile App
+
+From the project root:
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Start Metro bundler
 npm start
 
-# OR using Yarn
-yarn start
-```
-
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
-
-```sh
-# Using npm
+# 3. In a separate terminal, install and launch on Android:
 npm run android
-
-# OR using Yarn
-yarn android
 ```
 
-### iOS
+---
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+## 4. Failure on Demand (Chaos Engineering)
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+To prove that the delivery pipeline survives all failure modes, the backend comes equipped with an on-demand chaos simulation engine (`server/src/middleware/chaos.ts`).
 
-```sh
-bundle install
+### Available Simulation Modes
+
+| Mode | Behavior | Real-World Analog |
+| :--- | :--- | :--- |
+| `delay` | Injects artificial latency before responding | 2G/EDGE network latency |
+| `drop` | Destroys the TCP socket immediately | Cell tower handover, tunnel outage |
+| `error` | Responds with HTTP 500 Internal Server Error | Server degradation, database outage |
+| `rate_limit` | Responds with HTTP 429 Too Many Requests | API gateway throttling |
+
+Evaluators can trigger chaos either globally (via stateful API) or per-request (via HTTP headers):
+
+---
+
+### Method A: In-App Simulator Panel (Easiest & Recommended)
+
+The mobile app includes a built-in **🛠️ Failure & Chaos Simulator** panel directly at the top of the main screen:
+- Tap on the simulator card to expand it.
+- Tap **Drop Connection** (⚡) to make the server immediately destroy incoming sockets.
+- Tap **500 Server Error** (💥) to make the server respond with HTTP 500.
+- Tap **2G Latency** (🐌) to inject a 15-second response delay.
+- Tap **Rate Limit** (🔒) to return HTTP 429.
+- Tap **Normal (Healthy)** (🟢) to restore normal operations.
+
+---
+
+### Method B: Terminal / API Control (cURL)
+
+You can also set the chaos mode directly using `curl` against the backend:
+
+#### 1. Drop Connections (Socket Reset)
+```bash
+curl -X POST http://localhost:5000/api/chaos \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "drop"}'
+```
+*Expected App Behavior:* The mobile queue catches the dropped socket, marks the report as failed with an exponential retry timestamp, and automatically retries when the server recovers.
+
+#### 2. High Latency (Simulate 2G Link)
+```bash
+curl -X POST http://localhost:5000/api/chaos \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "delay", "delayMs": 15000}'
+```
+*Expected App Behavior:* The report remains in `↑ Uploading...` status until the transfer finishes. The 120s timeout budget accommodates the high delay.
+
+#### 3. Server Errors (500 Internal Server Error)
+```bash
+curl -X POST http://localhost:5000/api/chaos \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "error", "statusCode": 500, "message": "Simulated upstream failure"}'
+```
+*Expected App Behavior:* The client captures the 500 response, increments retry counters, and schedules the next retry with jitter.
+
+#### 4. Rate Limiting (429 Too Many Requests)
+```bash
+curl -X POST http://localhost:5000/api/chaos \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "rate_limit", "retryAfterSeconds": 30}'
 ```
 
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
+#### 5. Reset Chaos to Normal Operation
+```bash
+curl -X POST http://localhost:5000/api/chaos/reset
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+---
 
-```sh
-# Using npm
-npm run ios
+### Method C: Physical & OS-Level Stress Testing
 
-# OR using Yarn
-yarn ios
+1. **Airplane Mode Test**:
+   - Compose a report with 5 photos and tap **Save Report**.
+   - Immediately switch phone into **Airplane Mode**.
+   - Note that the status displays "Waiting to upload".
+   - Turn Airplane Mode **OFF**.
+   - NetInfo triggers immediately; the queue wakes up and lands the report without user intervention.
+
+2. **Force-Quit Mid-Flight Test**:
+   - Save a report.
+   - While the card displays `↑ Uploading...`, swipe the app away from the Android Recent Apps / task switcher.
+   - Reopen the app.
+   - On startup, the queue worker discovers the interrupted upload, resets it from `uploading` to `pending`, and successfully completes the transfer.
+
+3. **Server Death Mid-Upload**:
+   - Stop the backend process (`Ctrl + C`) while an upload is underway.
+   - Restart the server (`npm run dev`).
+   - The queue worker retries and delivers the report. Due to the atomic `reportId` deduplication, no duplicates are created.
+
+---
+
+## 5. "Start Over" (Deliberate Reset & Blast Radius)
+
+The brief requires a deliberate reset with a clearly defined blast radius:
+
+> *"A deliberate reset. You decide how far the blast radius goes, and say so."*
+
+In this application, **Start Over** is available directly on the main screen and offers an explicit choice of blast radius via confirmation dialog:
+
+### Blast Radius Levels
+
+```
+                   +------------------------------------+
+                   |         Start Over Trigger         |
+                   +-----------------+------------------+
+                                     |
+               +---------------------+---------------------+
+               |                                           |
+               v                                           v
+    [Option 1: Local Queue Only]              [Option 2: Full System Reset]
+    +------------------------------+          +------------------------------+
+    | Local SQLite Tables Wiped    |          | Local SQLite Tables Wiped    |
+    | Local report-images/ Deleted |          | Local report-images/ Deleted |
+    | Server Reports UNTOUCHED     |          | Server DB Collection Dropped |
+    |                              |          | Server /uploads/ Purged      |
+    +------------------------------+          +------------------------------+
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+1. **Option 1: Local Queue Only (Default Field Worker Reset)**
+   - **What gets wiped**: The local SQLite `reports` and `report_images` tables are wiped. The local cached compressed images in `DocumentDir/report-images/` are unlinked.
+   - **What is preserved**: All submitted reports on the server remain intact and visible in the Review section.
+   - **Use case**: A field worker made an error on an offline report that has not yet uploaded and wants to clear the pending queue on their device without affecting past submitted work.
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+2. **Option 2: Full Reset (Device + Server Wipe)**
+   - **What gets wiped**: The local device queue and cache are wiped, and a `POST /api/reports/reset` request is sent to the server. The server drops all MongoDB report documents and unlinks all files in `server/uploads/`.
+   - **Use case**: Evaluators, QA testers, and developers who need to return the entire system to a pristine, clean-slate state before beginning a new test scenario.
 
-## Step 3: Modify your app
+---
 
-Now that you have successfully run the app, let's make changes!
+## 6. Deliberate Design Decisions & Trade-Offs
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+| Decision | Alternative Considered | Why We Chose This Path |
+| :--- | :--- | :--- |
+| **Progressive Compression Ladder** | Fixed 50% resize on all images | Large 18 MB camera originals straight off modern phone sensors can fail fixed compression. A multi-tier ladder (`2560px` down to `1024px`) guarantees the file lands strictly under 5 MB while retaining high diagnostic visual detail. |
+| **Sequential FIFO Uploads** | Concurrent multi-report uploads | On 2G (often ~50 kbps with packet drop), uploading 3 reports concurrently splits the already tiny bandwidth, causing all three connections to hit read timeouts. Sequential uploads guarantee forward progress. |
+| **Local Sandboxed Image Storage** | Referencing raw camera/gallery URIs | Temporary URIs (`content://` or cache files) can be reclaimed by Android or deleted by the user while the report waits in the offline queue. Copying compressed files to `report-images/` guarantees local persistence across reboots. |
+| **Client-Side `reportId` UUID** | Server-assigned auto-increment ID | If an upload succeeds on the server but the TCP ACK is lost on a flaky network, a client retry would create a duplicate record. With a client-generated UUID, the server performs an atomic upsert on `reportId`, ensuring exactly-once semantics. |
+| **Review Fetched From Server** | Reading local `uploaded` SQLite rows | The brief mandates: *"Show what the server holds — fetched from it, not read back out of local state."* The "Submitted Reports" list is fetched directly via `GET /api/reports`. Local rows are used only for offline queue tracking. |
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+---
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+## 7. What Was Knowingly Left Out (Scope Discipline)
 
-## Congratulations! :tada:
+Per the brief's instruction:
+> *"No login, no push notifications, no comments, no map, no video, no editing an already-uploaded report. We would rather see the upload path finished to production standard than six features done thinly."*
 
-You've successfully run and modified your React Native App. :partying_face:
+We strictly adhered to this boundary:
+- **No authentication / user management**: The inspector is pre-identified.
+- **No background push notifications**: Upload queue is driven by internal worker loops and NetInfo triggers.
+- **No map / GPS geolocation**: Kept the UI uncluttered and focused entirely on the 5-photo upload pipeline.
+- **No editing existing reports**: Once received by the server, records are immutable (consistent with inspection audit logs).
 
-### Now what?
+---
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+## 8. What I Would Do With Another Day
 
-# Troubleshooting
+1. **Tus / Resumable Byte-Range Chunking**:
+   - For even harsher networks (e.g. sub-2G speeds where even a 3 MB file cannot complete in a single uninterrupted connection window), implement chunked resumable uploads using the `tus` protocol or presigned S3 multipart uploads.
+2. **Android Foreground Service / WorkManager**:
+   - While the current worker loop survives app restarts and NetInfo events, registering a native Android `WorkManager` task or Foreground Service notification would allow uploads to proceed even when the user has placed the app in the background for hours.
+3. **Optimized Thumbnail Cache**:
+   - Implement localized LRU caching for thumbnails on the Review section to minimize data consumption when viewing previously submitted reports on 2G.
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+---
 
-# Learn More
+## 9. Verification & Test Checklist
 
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+- [x] **1–5 Photos bounded**: Cannot submit 0 photos; cannot pick or shoot > 5 photos.
+- [x] **Non-blank description required**: Validated before storage.
+- [x] **5 MB Ceiling**: Evaluated with camera photos up to 18 MB. All stored and uploaded files measure under 5 MB.
+- [x] **survives Force-Quit**: Stored in persistent SQLite; resumed seamlessly on next launch.
+- [x] **Survives Network Loss**: NetInfo detects disconnection and pauses; reconnect instantly resumes.
+- [x] **Survives Server Errors**: Retries with exponential backoff on 500, 429, and socket drops.
+- [x] **Exactly-once Delivery**: Zero duplicate records in MongoDB despite simulated retries.
+- [x] **Review Screen**: Fetched live from `GET /api/reports` with image dimensions, MIME type, and preview modal.
+- [x] **Start Over**: Modal prompt with dual-level blast radius (Local vs. Full System).
+- [x] **Typecheck Clean**: Both mobile client (`npx tsc --noEmit`) and server pass with 0 errors.

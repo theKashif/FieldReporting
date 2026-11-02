@@ -1,7 +1,6 @@
+import { Asset } from 'react-native-image-picker';
 
-import {Asset} from 'react-native-image-picker';
-
-import {createReport} from '../repositories/reportRepository';
+import { createReport } from '../repositories/reportRepository';
 import {
   deleteStoredImages,
   processAndStoreImage,
@@ -33,33 +32,29 @@ export async function saveReport(
   const storedImages: StoredImage[] = [];
 
   try {
-    // Process images one at a time.
+    // Process images sequentially to manage memory on lower-end devices.
     for (const asset of assets) {
-
-        console.log('ORIGINAL IMAGE:', {
-    uri: asset.uri,
-    size: asset.fileSize,
-    sizeMB: asset.fileSize
-      ? (asset.fileSize / 1024 / 1024).toFixed(2)
-      : 'Unknown',
-  });
-
       if (!asset.uri) {
         throw new Error('One of the selected images is invalid.');
       }
 
-      const storedImage = await processAndStoreImage(asset.uri);
+      console.log('PROCESSING IMAGE:', {
+        uri: asset.uri,
+        originalSize: asset.fileSize
+          ? `${(asset.fileSize / 1024 / 1024).toFixed(2)} MB`
+          : 'Unknown',
+      });
 
-                  console.log('COMPRESSED IMAGE:', {
-    uri: storedImage.uri,
-    size: storedImage.size,
-    sizeMB: (storedImage.size / 1024 / 1024).toFixed(2),
-  });
-  
+      // Compress and store permanently under the 5 MB limit.
+      const storedImage = await processAndStoreImage(asset.uri);
       storedImages.push(storedImage);
 
+      console.log('STORED COMPRESSED IMAGE:', {
+        id: storedImage.id,
+        uri: storedImage.uri,
+        sizeMB: (storedImage.size / 1024 / 1024).toFixed(2),
+      });
     }
-
 
     await createReport({
       id: createReportId(),
@@ -68,7 +63,7 @@ export async function saveReport(
     });
   } catch (error) {
     // If processing or database insertion fails,
-    // remove files already created for this report.
+    // clean up any physical files already created for this report.
     await deleteStoredImages(storedImages.map(image => image.uri));
 
     throw error;
