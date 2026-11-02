@@ -1,0 +1,12 @@
+## Android SDK Location
+## In most environments with ANDROID_HOME or ANDROID_SDK_ROOT set, this file is not needed.
+## If Gradle complains "SDK location not found", copy this file to 'android/local.properties' and set your path:
+
+## Windows Example (note double backslashes \\):
+# sdk.dir=C\:\\Users\\YOUR_USERNAME\\AppData\\Local\\Android\\Sdk
+
+## macOS Example:
+# sdk.dir=/Users/YOUR_USERNAME/Library/Android/sdk
+
+## Linux Example:
+# sdk.dir=/home/YOUR_USERNAME/Android/Sdk

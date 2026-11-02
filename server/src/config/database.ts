@@ -1,11 +1,9 @@
 import mongoose from 'mongoose';
 
 export async function connectDatabase(): Promise<void> {
-  const uri = process.env.MONGODB_URI;
-
-  if (!uri) {
-    throw new Error('MONGODB_URI is missing from environment variables.');
-  }
+  const uri =
+    process.env.MONGODB_URI ||
+    'mongodb://127.0.0.1:27017/field-reporting';
 
   await mongoose.connect(uri);
 

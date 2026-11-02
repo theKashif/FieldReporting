@@ -102,60 +102,83 @@ Field workers frequently operate in remote sites where connectivity is poor (2G 
 
 ---
 
-## 3. Getting Started
+## 3. Getting Started & Running the Project
+
+Follow these 3 simple steps to run the complete stack locally.
 
 ### Prerequisites
-- Node.js (v18 or higher)
-- Android SDK & Android Studio (or connected Android device via USB debugging)
-- MongoDB instance (local or MongoDB Atlas connection string)
+- **Node.js**: v18 or higher (v20+ recommended)
+- **MongoDB**: Running locally on `localhost:27017` or a MongoDB Atlas connection string
+- **Android Environment**: Android Studio with SDK installed, and either a connected physical device (with USB debugging enabled) or an Android Emulator running.
 
 ---
 
-### Step 1: Start the Backend Server
+### Step 1: Start the Backend Server (Terminal 1)
 
 ```bash
 cd server
 npm install
-```
 
-Configure your environment: create a `server/.env` file (or use default `mongodb://127.0.0.1:27017/field-reporting`):
-```env
-PORT=5000
-MONGODB_URI=mongodb://127.0.0.1:27017/field-reporting
-CLIENT_URL=*
-```
+# Optional: copy example env (defaults automatically to port 5000 & local MongoDB if omitted)
+cp .env.example .env
 
-Start the server in development mode:
-```bash
+# Start server in watch mode:
 npm run dev
 ```
-The server will start at `http://localhost:5000`.
+The server will output:
+```text
+MongoDB connected successfully.
+Server is running on port 5000
+```
 
 ---
 
-### Step 2: Route Device Traffic to Localhost
+### Step 2: Route Device Traffic to Host (Terminal 2)
 
-If testing with a physical Android device or emulator via USB debugging, forward port 5000:
+When running on a physical Android phone or an emulator, port 5000 must be routed to your development machine:
+
 ```bash
+# 1. Verify your device/emulator is recognized:
+adb devices
+
+# 2. Reverse forward port 5000:
 adb reverse tcp:5000 tcp:5000
 ```
-*(The app defaults to `http://localhost:5000/api/reports` via `src/config/api.ts`).*
+> **Note**: `adb reverse` allows the Android app running on the phone to connect directly to `http://localhost:5000` on your computer.
 
 ---
 
-### Step 3: Run the React Native Mobile App
+### Step 3: Run the React Native Mobile App (Terminal 3)
 
 From the project root:
+
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. Start Metro bundler
+# 2. Android SDK check (Only if needed):
+# If Gradle reports "SDK location not found", copy the sample file:
+#   Windows: copy android\local.properties.example android\local.properties
+#   macOS/Linux: cp android/local.properties.example android/local.properties
+# Then verify that sdk.dir points to your local Android SDK.
+
+# 3. Start Metro bundler
 npm start
 
-# 3. In a separate terminal, install and launch on Android:
+# 4. In a separate terminal, compile and launch on Android:
 npm run android
 ```
+
+---
+
+### Troubleshooting for Reviewers
+
+| Issue | Cause | Fix |
+| :--- | :--- | :--- |
+| **`SDK location not found`** | Gradle cannot find the Android SDK path | Copy `android/local.properties.example` to `android/local.properties` and ensure `sdk.dir` matches your Android SDK path. |
+| **`Network request failed` / Simulator shows `● Offline`** | The phone cannot reach the host server | Run `adb reverse tcp:5000 tcp:5000` while your phone is plugged in. Ensure `npm run dev` in the `server` folder is running. |
+| **`MongoDB connection error`** | Local MongoDB service is not started | Start your local MongoDB (`mongod` / MongoDB Compass) or put a remote MongoDB Atlas URI in `server/.env`. |
+| **Multer / upload permissions** | Uploads directory does not exist | The server automatically creates `server/uploads/temp/` on startup with full permissions. |
 
 ---
 
