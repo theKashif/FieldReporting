@@ -104,12 +104,24 @@ Field workers frequently operate in remote sites where connectivity is poor (2G 
 
 ## 3. Getting Started & Running the Project
 
-Follow these 3 simple steps to run the complete stack locally.
+Follow these simple steps to run the complete stack locally.
 
 ### Prerequisites
-- **Node.js**: v18 or higher (v20+ recommended)
-- **MongoDB**: Running locally on `localhost:27017` or a MongoDB Atlas connection string
-- **Android Environment**: Android Studio with SDK installed, and either a connected physical device (with USB debugging enabled) or an Android Emulator running.
+
+1. **Node.js**: v18 or higher (`node -v`)
+2. **Local MongoDB**: Running on port `27017` (default connection: `mongodb://127.0.0.1:27017/field-reporting`).
+   - **Option A (Docker - Instant)**:
+     ```bash
+     docker run -d -p 27017:27017 --name local-mongo mongo:latest
+     ```
+   - **Option B (Native Install / Service)**:
+     - **macOS (Homebrew)**: `brew services start mongodb-community`
+     - **Linux (systemd)**: `sudo systemctl start mongod`
+     - **Windows**: Start the MongoDB service in Windows Services, or run `mongod` from your terminal.
+   - *Note: If using MongoDB Atlas or a custom port, simply set `MONGODB_URI` in `server/.env`.*
+3. **Android Environment**:
+   - Android Studio with Android SDK installed.
+   - A connected physical Android device (with USB debugging enabled) or an Android Emulator running.
 
 ---
 
