@@ -28,3 +28,13 @@ export interface CreateReportInput {
   description: string;
   images: Omit<ReportImage, 'reportId'>[];
 }
+
+export type SavedReport = Report & {
+  images: ReportImage[];
+};
+
+export type PreviewImage = {
+  uri: string;
+  size?: number | null;
+  mimeType?: string | null;
+};
