@@ -75,8 +75,10 @@ Field workers frequently operate in remote sites where connectivity is poor (2G 
 
 ### Layer Breakdown
 
-1. **Presentation & Compose Layer** (`src/screens/CreateReportScreen.tsx`):
+1. **Presentation & Decomposed UI Layer** (`src/screens/` & `src/components/`):
    - Fast, non-blocking UI. The compose action takes user inputs and persists them immediately to local storage.
+   - Decomposed into isolated, memoized subcomponents (`ReportComposeForm`, `PendingReportsList`, `SubmittedReportsList`, `StartOverSection`) with `React.memo` to eliminate unnecessary re-renders when the user types in text inputs.
+   - Decoupled state, database querying, and background worker synchronization into a dedicated `useReports` custom hook (`src/hooks/useReports.ts`).
    - The UI never waits for network I/O to confirm report creation.
 
 2. **Progressive Compression Engine** (`src/services/imageStorageService.ts`):
@@ -99,6 +101,49 @@ Field workers frequently operate in remote sites where connectivity is poor (2G 
    - Express TypeScript API with MongoDB persistence and Multer file storage.
    - Every report submission includes a client-generated `reportId` UUID.
    - `Report.findOneAndUpdate({ reportId }, ..., { upsert: true })` ensures that even if an upload succeeds on the server but the connection drops before the 200 OK arrives at the client, the subsequent client retry is completely idempotent.
+
+---
+
+### Codebase Structure
+
+```text
+FieldReporting/
+├── android/                         # Android native project files
+│   └── local.properties.example     # SDK path template for reviewers
+├── server/                          # Express + TypeScript backend
+│   ├── src/
+│   │   ├── config/database.ts       # MongoDB connection with zero-config fallback
+│   │   ├── controllers/             # Report & reset controllers
+│   │   ├── middleware/chaos.ts      # Failure on Demand (drop, delay, 500, 429)
+│   │   ├── routes/                  # /api/reports and /api/chaos endpoints
+│   │   └── app.ts                   # Express server entry point
+│   ├── uploads/                     # Upload destination (disk storage)
+│   └── .env.example                 # Backend environment template
+├── src/                             # React Native client
+│   ├── components/
+│   │   ├── ChaosControlPanel.tsx    # In-app failure simulator panel
+│   │   ├── ImagePreviewModal.tsx    # Full-screen image inspector
+│   │   ├── PendingReportsList.tsx   # Offline SQLite queue list (memoized)
+│   │   ├── ReportComposeForm.tsx    # Compose form & attachments (memoized)
+│   │   ├── ReportImageItem.tsx      # Thumbnail item with size & mimeType
+│   │   ├── StartOverSection.tsx     # Deliberate reset trigger (memoized)
+│   │   └── SubmittedReportsList.tsx # Live server-fetched reports (memoized)
+│   ├── hooks/
+│   │   └── useReports.ts            # Data fetching, worker lifecycle & syncing hook
+│   ├── repositories/
+│   │   └── reportRepository.ts      # SQLite CRUD operations
+│   ├── services/
+│   │   ├── chaosService.ts          # Chaos simulation API client
+│   │   ├── imageStorageService.ts   # Progressive compression ladder (< 5 MB)
+│   │   ├── reportApiService.ts      # Server reports & reset API calls
+│   │   ├── reportService.ts         # Local report creation orchestrator
+│   │   └── reportUploadService.ts   # Multipart upload with 120s timeout
+│   ├── workers/
+│   │   └── uploadQueueWorker.ts     # Detached FIFO upload queue engine
+│   └── screens/
+│       └── CreateReportScreen.tsx   # High-level clean screen orchestrator
+└── README.md                        # Documentation & reviewer guide
+```
 
 ---
 
@@ -372,4 +417,5 @@ We strictly adhered to this boundary:
 - [x] **Exactly-once Delivery**: Zero duplicate records in MongoDB despite simulated retries.
 - [x] **Review Screen**: Fetched live from `GET /api/reports` with image dimensions, MIME type, and preview modal.
 - [x] **Start Over**: Modal prompt with dual-level blast radius (Local vs. Full System).
+- [x] **Modular & Decoupled UI**: Screen decomposed into memoized subcomponents (`ReportComposeForm`, `PendingReportsList`, `SubmittedReportsList`, `StartOverSection`) and an isolated `useReports` custom hook.
 - [x] **Typecheck Clean**: Both mobile client (`npx tsc --noEmit`) and server pass with 0 errors.
